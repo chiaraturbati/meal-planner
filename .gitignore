@@ -22,9 +22,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-
-.firebase
 .env
 .env.example
-src/firebase.js
-firebase.js.backup
