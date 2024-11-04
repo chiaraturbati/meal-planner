@@ -131,4 +131,4 @@ service cloud.firestore {
 
 Chiara Turbati www.linkedin.com/in/chiara-turbati-developer
 
-Project Link: [https://github.com/yourusername/meal-planner](https://github.com/yourusername/meal-planner)
+Project Link: [https://github.com/chiaraturbati/meal-planner](https://github.com/chiaraturbati/meal-planner)
