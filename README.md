@@ -111,25 +111,6 @@ service cloud.firestore {
 }
 ```
 
-## Project Structure 📁
-
-```
-src/
-  components/           # React components
-    WeeklyView.js      # Weekly calendar view
-    MealForm.js        # Add/edit meal form
-    SharingManager.js  # Sharing management
-    SharedMealsView.js # Shared meals display
-  utils/               # Utility functions
-    migrateMealPlans.js
-    fixDatabase.js
-    sharedMealsLoader.js
-    styles.js
-    debugUtils.js
-  App.js               # Main application component
-  firebase.js         # Firebase configuration
-```
-
 ## Available Scripts 📜
 
 - `npm start`: Runs the app in development mode
@@ -145,13 +126,9 @@ src/
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## Acknowledgments 🙏
-
-- [Create React App](https://github.com/facebook/create-react-app)
-- [Firebase](https://firebase.google.com/)
 
 ## Contact 📧
 
-Chiara Turbati
+Chiara Turbati www.linkedin.com/in/chiara-turbati-developer
 
 Project Link: [https://github.com/yourusername/meal-planner](https://github.com/yourusername/meal-planner)
