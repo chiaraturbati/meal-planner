@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { auth } from "./firebase";
-import LoginForm from "./components/auth/LoginForm";
-import UserHeader from "./components/auth/UserHeader";
-import PlanSelector from "./components/plans/PlanSelector";
-import WeeklyView from "./components/WeeklyView";
-import MealForm from "./components/MealForm";
-import SharingManager from "./components/SharingManager";
-import { useMeals } from "./hooks/useMeals";
+import {
+  PlanSelector,
+  MealForm,
+  WeeklyView,
+  SharingManager,
+  UserHeader,
+  LoginForm,
+} from "./components";
 import { containerStyle } from "./utils/styles";
-import { useMealPlans } from "./hooks/useMealPlans";
+import { useMealPlans, useMeals } from "./hooks";
 
 function App() {
   // Stati di autenticazione
@@ -35,7 +36,6 @@ function App() {
     useMealPlans(user);
 
   const {
-    meals,
     newMeal,
     setNewMeal,
     editingMeal,
