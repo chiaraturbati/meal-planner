@@ -3,12 +3,12 @@ import { auth, db } from "./firebase";
 import {
   collection,
   addDoc,
-  getDocs,
   query,
   where,
   deleteDoc,
   doc,
   updateDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import {
   signInWithEmailAndPassword,
@@ -16,13 +16,11 @@ import {
   signOut,
 } from "firebase/auth";
 import { migrateMealPlans } from "./utils/migrateMealPlans";
-import { loadSharedContent } from "./utils/sharedMealsLoader";
 
 // Componenti
 import WeeklyView from "./components/WeeklyView";
 import MealForm from "./components/MealForm";
 import SharingManager from "./components/SharingManager";
-import SharedMealsView from "./components/SharedMealsView";
 import DebugSharingView from "./utils/debugUtils";
 
 // Stili
@@ -41,7 +39,11 @@ function App() {
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [userPlan, setUserPlan] = useState(null);
+
+  // Stati per i piani pasto
+  const [activePlanId, setActivePlanId] = useState(null);
+  const [availablePlans, setAvailablePlans] = useState([]);
+  const [sharedWithUsers, setSharedWithUsers] = useState([]);
 
   // Stati per i pasti
   const [meals, setMeals] = useState([]);
@@ -54,10 +56,6 @@ function App() {
   });
   const [editingMeal, setEditingMeal] = useState(null);
 
-  // Stati per la condivisione
-  const [sharedWithUsers, setSharedWithUsers] = useState({});
-  const [sharedMeals, setSharedMeals] = useState([]);
-
   // Stato per la navigazione settimanale
   const [currentWeek, setCurrentWeek] = useState(() => {
     const now = new Date();
@@ -66,85 +64,113 @@ function App() {
     return now.toISOString().split("T")[0];
   });
 
-  // Carica i dati iniziali e gestisce l'auth
+  // Gestione autenticazione e caricamento dati iniziale
   useEffect(() => {
-    const loadInitialData = async (user) => {
-      try {
-        // Fix e migrazione database
-        await fixDatabaseStructure(user);
-        const plan = await migrateMealPlans(user);
-
-        if (plan) {
-          setUserPlan(plan);
-          setSharedWithUsers(plan.sharedWith || {});
-        }
-
-        // Carica i pasti dell'utente
-        if (plan?.id) {
-          const mealsQuery = query(
-            collection(db, "meals"),
-            where("planId", "==", plan.id)
-          );
-          const mealsSnapshot = await getDocs(mealsQuery);
-          const mealsData = mealsSnapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-          }));
-          setMeals(mealsData);
-        }
-
-        // Carica i contenuti condivisi
-        const { meals: sharedMealsData } = await loadSharedContent(user);
-        setSharedMeals(sharedMealsData);
-      } catch (error) {
-        console.error("Errore nel caricamento iniziale:", error);
-      }
-    };
-
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
       setUser(user);
       if (user) {
-        loadInitialData(user);
+        try {
+          // Fix database e migrazione
+          await fixDatabaseStructure(user);
+          const migratedPlan = await migrateMealPlans(user);
+
+          // Ora che abbiamo migrato, possiamo caricare i piani
+          const loadPlans = async () => {
+            const plansRef = collection(db, "mealPlans");
+
+            // Prima carica i piani di proprietà
+            const ownedPlansQuery = query(
+              plansRef,
+              where("userId", "==", user.uid)
+            );
+
+            // Poi carica i piani condivisi
+            const sharedPlansQuery = query(
+              plansRef,
+              where("sharedWith", "array-contains", user.email)
+            );
+
+            // Usa onSnapshot per entrambe le queries
+            const unsubOwned = onSnapshot(ownedPlansQuery, (snapshot) => {
+              const ownedPlans = snapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+                isOwner: true,
+              }));
+
+              const unsubShared = onSnapshot(
+                sharedPlansQuery,
+                (sharedSnapshot) => {
+                  const sharedPlans = sharedSnapshot.docs.map((doc) => ({
+                    id: doc.id,
+                    ...doc.data(),
+                    isOwner: false,
+                  }));
+
+                  // Combina i risultati
+                  const allPlans = [...ownedPlans, ...sharedPlans];
+                  setAvailablePlans(allPlans);
+
+                  // Imposta il piano attivo se necessario
+                  if (!activePlanId && allPlans.length > 0) {
+                    setActivePlanId(allPlans[0].id);
+                    // Imposta sharedWith solo se è il proprietario
+                    if (allPlans[0].isOwner) {
+                      setSharedWithUsers(allPlans[0].sharedWith || []);
+                    }
+                  }
+                }
+              );
+
+              return () => unsubShared();
+            });
+
+            return () => unsubOwned();
+          };
+
+          loadPlans();
+        } catch (error) {
+          console.error("Errore nel caricamento iniziale:", error);
+        }
       } else {
-        setUserPlan(null);
+        setActivePlanId(null);
+        setAvailablePlans([]);
+        setSharedWithUsers([]);
         setMeals([]);
-        setSharedWithUsers({});
-        setSharedMeals([]);
       }
     });
 
     return () => unsubscribe();
   }, []);
 
-  // Funzioni di gestione pasti
-  const loadMeals = async (userId) => {
-    if (!userPlan?.id) return;
+  // Carica i pasti per il piano attivo
+  useEffect(() => {
+    if (!activePlanId) return;
 
-    try {
-      const q = query(
-        collection(db, "meals"),
-        where("planId", "==", userPlan.id)
-      );
-      const querySnapshot = await getDocs(q);
-      const mealsData = querySnapshot.docs.map((doc) => ({
+    const mealsRef = collection(db, "meals");
+    const q = query(mealsRef, where("planId", "==", activePlanId));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const mealsData = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
       setMeals(mealsData);
-    } catch (error) {
-      console.error("Error loading meals:", error);
-    }
-  };
+    });
 
+    return () => unsubscribe();
+  }, [activePlanId]);
+
+  // Funzioni di gestione pasti
   const handleAddMeal = async (e) => {
     e.preventDefault();
-    if (!user || !newMeal.date || !userPlan?.id) return;
+    if (!user || !newMeal.date || !activePlanId) return;
 
     try {
       const mealData = {
         ...newMeal,
         userId: user.uid,
-        planId: userPlan.id,
+        planId: activePlanId,
         createdAt: new Date().toISOString(),
       };
 
@@ -156,7 +182,6 @@ function App() {
         lunchCategory: "altro",
         dinnerCategory: "altro",
       });
-      loadMeals(user.uid);
     } catch (error) {
       console.error("Error adding meal:", error);
     }
@@ -174,7 +199,6 @@ function App() {
         dinnerCategory: editingMeal.dinnerCategory,
       });
       setEditingMeal(null);
-      loadMeals(user.uid);
     } catch (error) {
       console.error("Error editing meal:", error);
     }
@@ -185,14 +209,13 @@ function App() {
 
     try {
       await deleteDoc(doc(db, "meals", mealId));
-      loadMeals(user.uid);
     } catch (error) {
       console.error("Error deleting meal:", error);
     }
   };
 
   const handleCopyMeal = async (sourceMeal, targetDate) => {
-    if (!userPlan?.id) return;
+    if (!activePlanId) return;
 
     try {
       const existingMeal = getMealsForDate(targetDate);
@@ -209,7 +232,7 @@ function App() {
 
       const newMealData = {
         userId: user.uid,
-        planId: userPlan.id,
+        planId: activePlanId,
         date: targetDate,
         lunch: sourceMeal.lunch,
         dinner: sourceMeal.dinner,
@@ -219,15 +242,49 @@ function App() {
       };
 
       await addDoc(collection(db, "meals"), newMealData);
-      loadMeals(user.uid);
     } catch (error) {
       console.error("Error copying meal:", error);
     }
   };
 
-  // Funzioni di autenticazione
+  // Componente per selezionare il piano attivo
+  const PlanSelector = () => {
+    if (availablePlans.length <= 1) return null;
+
+    return (
+      <div style={{ marginBottom: "20px" }}>
+        <select
+          value={activePlanId || ""}
+          onChange={(e) => setActivePlanId(e.target.value)}
+          style={{
+            padding: "8px 12px",
+            borderRadius: "8px",
+            border: "1px solid #ddd",
+            width: "100%",
+            maxWidth: "300px",
+          }}
+        >
+          {availablePlans.map((plan) => (
+            <option key={plan.id} value={plan.id}>
+              {plan.name || "Piano Pasti"}
+              {plan.ownerEmail === user.email
+                ? "(Tuo)"
+                : `(Condiviso da ${plan.ownerEmail})`}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  };
+
+  // Funzioni di autenticazione da aggiungere dopo le funzioni di gestione pasti
   const handleLogin = async (e) => {
     e.preventDefault();
+    if (!email || !password) {
+      alert("Inserisci email e password");
+      return;
+    }
+
     try {
       const userCredential = await signInWithEmailAndPassword(
         auth,
@@ -235,16 +292,46 @@ function App() {
         password
       );
       setUser(userCredential.user);
+
+      // Reset form
       setEmail("");
       setPassword("");
     } catch (error) {
       console.error("Error logging in:", error);
-      alert("Errore di login: " + error.message);
+      let errorMessage = "Errore di login";
+
+      // Messaggi di errore più specifici
+      switch (error.code) {
+        case "auth/invalid-email":
+          errorMessage = "Email non valida";
+          break;
+        case "auth/user-disabled":
+          errorMessage = "Questo account è stato disabilitato";
+          break;
+        case "auth/user-not-found":
+          errorMessage = "Utente non trovato";
+          break;
+        case "auth/wrong-password":
+          errorMessage = "Password non corretta";
+          break;
+        case "auth/too-many-requests":
+          errorMessage = "Troppi tentativi. Riprova più tardi";
+          break;
+        default:
+          errorMessage = `Errore di login: ${error.message}`;
+      }
+
+      alert(errorMessage);
     }
   };
 
   const handleSignUp = async (e) => {
     e.preventDefault();
+    if (!email || !password) {
+      alert("Inserisci email e password");
+      return;
+    }
+
     try {
       const userCredential = await createUserWithEmailAndPassword(
         auth,
@@ -252,20 +339,47 @@ function App() {
         password
       );
       setUser(userCredential.user);
+
+      // Crea un piano pasti default per il nuovo utente
+      const planRef = await addDoc(collection(db, "mealPlans"), {
+        userId: userCredential.user.uid,
+        ownerEmail: userCredential.user.email,
+        name: "Piano Pasti Personale",
+        sharedWith: [], // Array vuoto invece di oggetto
+        createdAt: new Date().toISOString(),
+      });
+
+      setActivePlanId(planRef.id);
       setEmail("");
       setPassword("");
     } catch (error) {
-      console.error("Error signing up:", error);
-      alert("Errore di registrazione: " + error.message);
+      console.log("Error signing up:", error);
+      // ... gestione errori ...
     }
   };
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
+      // Reset di tutti gli stati
       setUser(null);
+      setActivePlanId(null);
+      setAvailablePlans([]);
+      setSharedWithUsers([]);
+      setMeals([]);
+      setNewMeal({
+        date: "",
+        lunch: "",
+        dinner: "",
+        lunchCategory: "altro",
+        dinnerCategory: "altro",
+      });
+      setEditingMeal(null);
+      setEmail("");
+      setPassword("");
     } catch (error) {
       console.error("Error logging out:", error);
+      alert("Errore durante il logout");
     }
   };
 
@@ -330,10 +444,11 @@ function App() {
 
   const isDev = process.env.NODE_ENV === "development";
 
-  // Rendering della dashboard principale
+  // Rendering principale
   return (
     <div style={containerStyle}>
-      {isDev && <DebugSharingView currentUser={user} />}
+      {/* {isDev && <DebugSharingView currentUser={user} />} */}
+
       <div style={layoutStyles.flexBetween}>
         <h1 style={typographyStyles.h1}>Meal Planner</h1>
         <div style={layoutStyles.flex}>
@@ -347,33 +462,43 @@ function App() {
         </div>
       </div>
 
-      <WeeklyView
-        currentWeek={currentWeek}
-        navigateWeek={navigateWeek}
-        getWeekDates={getWeekDates}
-        getMealsForDate={getMealsForDate}
-        setEditingMeal={setEditingMeal}
-        handleDeleteMeal={handleDeleteMeal}
-        handleCopyMeal={handleCopyMeal}
-      />
+      <PlanSelector />
 
-      <MealForm
-        editingMeal={editingMeal}
-        newMeal={newMeal}
-        setNewMeal={setNewMeal}
-        setEditingMeal={setEditingMeal}
-        handleAddMeal={handleAddMeal}
-        handleEditMeal={handleEditMeal}
-      />
+      {activePlanId && (
+        <>
+          <WeeklyView
+            currentWeek={currentWeek}
+            navigateWeek={navigateWeek}
+            getWeekDates={getWeekDates}
+            getMealsForDate={getMealsForDate}
+            setEditingMeal={setEditingMeal}
+            handleDeleteMeal={handleDeleteMeal}
+            handleCopyMeal={handleCopyMeal}
+            isSharedPlan={
+              availablePlans.find((p) => p.id === activePlanId)?.ownerEmail !==
+              user.email
+            }
+          />
 
-      {userPlan && (
-        <SharingManager
-          planId={userPlan.id}
-          sharedWithUsers={sharedWithUsers}
-        />
+          <MealForm
+            editingMeal={editingMeal}
+            newMeal={newMeal}
+            setNewMeal={setNewMeal}
+            setEditingMeal={setEditingMeal}
+            handleAddMeal={handleAddMeal}
+            handleEditMeal={handleEditMeal}
+            planId={activePlanId}
+          />
+
+          {availablePlans.find((p) => p.id === activePlanId)?.ownerEmail ===
+            user.email && (
+            <SharingManager
+              planId={activePlanId}
+              sharedWithUsers={sharedWithUsers}
+            />
+          )}
+        </>
       )}
-
-      <SharedMealsView sharedMeals={sharedMeals} />
     </div>
   );
 }

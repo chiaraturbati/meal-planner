@@ -11,69 +11,135 @@ import { db } from "../firebase";
 
 const DebugSharingView = ({ currentUser }) => {
   const [debugInfo, setDebugInfo] = useState({
-    directPlan: null,
-    sharedPlans: [],
+    userPlans: [],
+    sharedPlansObject: [], // Piani trovati con query object-based
+    sharedPlansArray: [], // Piani trovati con query array-based
     accessibleMeals: [],
     errors: [],
+    queries: [], // Storico delle query eseguite
     loading: true,
   });
 
   useEffect(() => {
     const debugSharing = async () => {
       const errors = [];
+      const queries = [];
       const debugData = {
-        directPlan: null,
-        sharedPlans: [],
+        userPlans: [],
+        sharedPlansObject: [],
+        sharedPlansArray: [],
         accessibleMeals: [],
+        queries: [],
         errors: [],
       };
 
       try {
-        // 1. Accesso diretto al piano di Chiara
-        const ownerPlanId = "hUvs58mvSKn4aoCuXwah"; // ID del piano di chiara0494
-        console.log("🔍 Tentativo accesso diretto al piano:", ownerPlanId);
-
+        // 1. Cerca i piani dell'utente corrente
+        console.log("🔍 Ricerca piani dell'utente:", currentUser.email);
         try {
-          const directPlanRef = doc(db, "mealPlans", ownerPlanId);
-          const directPlan = await getDoc(directPlanRef);
-          debugData.directPlan = directPlan.exists()
-            ? { id: directPlan.id, ...directPlan.data() }
-            : null;
-
-          console.log("📄 Piano trovato:", debugData.directPlan);
-        } catch (e) {
-          errors.push(`Errore accesso diretto: ${e.message}`);
-          console.error("❌ Errore accesso diretto:", e);
-        }
-
-        // 2. Query per piani condivisi
-        console.log("🔍 Query piani condivisi per:", currentUser.email);
-        try {
-          const sharedPlansQuery = query(
+          const userPlansQuery = query(
             collection(db, "mealPlans"),
-            where(`sharedWith.${currentUser.email}`, "==", true)
+            where("userId", "==", currentUser.uid)
           );
+          queries.push({
+            type: "userPlans",
+            query: "where('userId', '==', currentUser.uid)",
+          });
 
-          const sharedPlansSnapshot = await getDocs(sharedPlansQuery);
-          console.log("📊 Piani trovati:", sharedPlansSnapshot.size);
-
-          debugData.sharedPlans = sharedPlansSnapshot.docs.map((doc) => ({
+          const userPlansSnapshot = await getDocs(userPlansQuery);
+          debugData.userPlans = userPlansSnapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
           }));
+          console.log("📊 Piani utente trovati:", {
+            count: userPlansSnapshot.size,
+            plans: debugData.userPlans,
+          });
         } catch (e) {
-          errors.push(`Errore query piani: ${e.message}`);
-          console.error("❌ Errore query piani:", e);
+          errors.push(`Errore ricerca piani utente: ${e.message}`);
+          console.error("❌ Errore ricerca piani utente:", e);
         }
 
-        // 3. Cerca pasti per ogni piano
-        console.log("🔍 Ricerca pasti associati");
-        for (const plan of debugData.sharedPlans) {
+        // 2. Query per piani condivisi (object-based)
+        console.log(
+          "🔍 Query piani condivisi (object) per:",
+          currentUser.email
+        );
+        try {
+          const sharedPlansObjectQuery = query(
+            collection(db, "mealPlans"),
+            where(`sharedWith.${currentUser.email}`, "==", true)
+          );
+          queries.push({
+            type: "sharedPlansObject",
+            query: `where('sharedWith.${currentUser.email}', '==', true)`,
+          });
+
+          const sharedPlansObjectSnapshot = await getDocs(
+            sharedPlansObjectQuery
+          );
+          debugData.sharedPlansObject = sharedPlansObjectSnapshot.docs.map(
+            (doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })
+          );
+          console.log("📊 Piani condivisi (object) trovati:", {
+            count: sharedPlansObjectSnapshot.size,
+            plans: debugData.sharedPlansObject,
+          });
+        } catch (e) {
+          errors.push(`Errore query piani (object): ${e.message}`);
+          console.error("❌ Errore query piani (object):", e);
+        }
+
+        // 3. Query per piani condivisi (array-based)
+        console.log("🔍 Query piani condivisi (array) per:", currentUser.email);
+        try {
+          const sharedPlansArrayQuery = query(
+            collection(db, "mealPlans"),
+            where("sharedWith", "array-contains", currentUser.email)
+          );
+          queries.push({
+            type: "sharedPlansArray",
+            query: "where('sharedWith', 'array-contains', currentUser.email)",
+          });
+
+          const sharedPlansArraySnapshot = await getDocs(sharedPlansArrayQuery);
+          debugData.sharedPlansArray = sharedPlansArraySnapshot.docs.map(
+            (doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })
+          );
+          console.log("📊 Piani condivisi (array) trovati:", {
+            count: sharedPlansArraySnapshot.size,
+            plans: debugData.sharedPlansArray,
+          });
+        } catch (e) {
+          errors.push(`Errore query piani (array): ${e.message}`);
+          console.error("❌ Errore query piani (array):", e);
+        }
+
+        // 4. Cerca pasti per ogni piano
+        const allPlans = [
+          ...debugData.userPlans,
+          ...debugData.sharedPlansObject,
+          ...debugData.sharedPlansArray,
+        ];
+
+        console.log("🔍 Ricerca pasti per", allPlans.length, "piani");
+        for (const plan of allPlans) {
           try {
             const mealsQuery = query(
               collection(db, "meals"),
               where("planId", "==", plan.id)
             );
+            queries.push({
+              type: "meals",
+              planId: plan.id,
+              query: `where('planId', '==', '${plan.id}')`,
+            });
 
             const mealsSnapshot = await getDocs(mealsQuery);
             const meals = mealsSnapshot.docs.map((doc) => ({
@@ -83,12 +149,17 @@ const DebugSharingView = ({ currentUser }) => {
             }));
 
             debugData.accessibleMeals.push(...meals);
-            console.log(`📊 Pasti trovati per piano ${plan.id}:`, meals.length);
+            console.log(`📊 Pasti trovati per piano ${plan.id}:`, {
+              count: meals.length,
+              meals,
+            });
           } catch (e) {
             errors.push(`Errore pasti piano ${plan.id}: ${e.message}`);
             console.error(`❌ Errore pasti piano ${plan.id}:`, e);
           }
         }
+
+        debugData.queries = queries;
       } catch (error) {
         errors.push(`Errore generale: ${error.message}`);
         console.error("❌ Errore generale:", error);
@@ -117,9 +188,10 @@ const DebugSharingView = ({ currentUser }) => {
         backgroundColor: "#f5f5f5",
         borderRadius: "8px",
         margin: "20px 0",
+        fontSize: "14px",
       }}
     >
-      <h3>Debug Condivisione</h3>
+      <h3>Debug Condivisione Avanzato</h3>
 
       <div style={{ marginBottom: "20px" }}>
         <h4>Utente Corrente</h4>
@@ -133,6 +205,11 @@ const DebugSharingView = ({ currentUser }) => {
             2
           )}
         </pre>
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <h4>Query Eseguite</h4>
+        <pre>{JSON.stringify(debugInfo.queries, null, 2)}</pre>
       </div>
 
       {debugInfo.errors.length > 0 && (
@@ -154,24 +231,45 @@ const DebugSharingView = ({ currentUser }) => {
       )}
 
       <div style={{ marginBottom: "20px" }}>
-        <h4>Piano Diretto (chiara0494)</h4>
-        {debugInfo.directPlan ? (
-          <pre>{JSON.stringify(debugInfo.directPlan, null, 2)}</pre>
-        ) : (
-          <p>Nessun accesso diretto al piano</p>
-        )}
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <h4>Piani Condivisi ({debugInfo.sharedPlans.length})</h4>
-        {debugInfo.sharedPlans.length > 0 ? (
-          debugInfo.sharedPlans.map((plan) => (
+        <h4>Piani Proprietari ({debugInfo.userPlans.length})</h4>
+        {debugInfo.userPlans.length > 0 ? (
+          debugInfo.userPlans.map((plan) => (
             <div key={plan.id} style={{ marginBottom: "10px" }}>
               <pre>{JSON.stringify(plan, null, 2)}</pre>
             </div>
           ))
         ) : (
-          <p>Nessun piano condiviso trovato</p>
+          <p>Nessun piano proprietario trovato</p>
+        )}
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <h4>
+          Piani Condivisi - Query Oggetto ({debugInfo.sharedPlansObject.length})
+        </h4>
+        {debugInfo.sharedPlansObject.length > 0 ? (
+          debugInfo.sharedPlansObject.map((plan) => (
+            <div key={plan.id} style={{ marginBottom: "10px" }}>
+              <pre>{JSON.stringify(plan, null, 2)}</pre>
+            </div>
+          ))
+        ) : (
+          <p>Nessun piano condiviso trovato (query oggetto)</p>
+        )}
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <h4>
+          Piani Condivisi - Query Array ({debugInfo.sharedPlansArray.length})
+        </h4>
+        {debugInfo.sharedPlansArray.length > 0 ? (
+          debugInfo.sharedPlansArray.map((plan) => (
+            <div key={plan.id} style={{ marginBottom: "10px" }}>
+              <pre>{JSON.stringify(plan, null, 2)}</pre>
+            </div>
+          ))
+        ) : (
+          <p>Nessun piano condiviso trovato (query array)</p>
         )}
       </div>
 

@@ -17,10 +17,7 @@ const SharingManager = ({ planId, sharedWithUsers = {} }) => {
     try {
       const planRef = doc(db, "mealPlans", planId);
       await updateDoc(planRef, {
-        sharedWith: {
-          ...sharedWithUsers,
-          [newEmail]: true,
-        },
+        sharedWith: [...(sharedWithUsers || []), newEmail],
       });
 
       setNewEmail("");
@@ -37,8 +34,9 @@ const SharingManager = ({ planId, sharedWithUsers = {} }) => {
     setError(null);
 
     try {
-      const updatedSharedWith = { ...sharedWithUsers };
-      delete updatedSharedWith[emailToRemove];
+      const updatedSharedWith = (sharedWithUsers || []).filter(
+        (email) => email !== emailToRemove
+      );
 
       const planRef = doc(db, "mealPlans", planId);
       await updateDoc(planRef, {
@@ -52,9 +50,7 @@ const SharingManager = ({ planId, sharedWithUsers = {} }) => {
     }
   };
 
-  // Converti l'oggetto sharedWithUsers in un array di email per il rendering
-  const sharedEmails = Object.keys(sharedWithUsers || {});
-
+  const sharedEmails = sharedWithUsers;
   return (
     <div
       style={{

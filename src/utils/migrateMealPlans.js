@@ -1,11 +1,9 @@
-// src/utils/migrationUtils.js
 import {
   collection,
   getDocs,
   addDoc,
   query,
   where,
-  writeBatch,
   doc,
   getDoc,
   updateDoc,
@@ -36,8 +34,9 @@ export const validatePlanStructure = (plan) => {
     );
   }
 
-  if (typeof plan.sharedWith !== "object" || Array.isArray(plan.sharedWith)) {
-    throw new Error("sharedWith deve essere un oggetto");
+  // Modifica: ora sharedWith deve essere un array
+  if (!Array.isArray(plan.sharedWith)) {
+    throw new Error("sharedWith deve essere un array");
   }
 
   return true;
@@ -84,28 +83,63 @@ export const migrateMealPlans = async (currentUser) => {
 
       logMigrationStep("Piano esistente trovato", existingPlan);
 
+      // Forza la conversione di sharedWith
+      if (
+        typeof existingPlan.sharedWith === "object" &&
+        !Array.isArray(existingPlan.sharedWith)
+      ) {
+        console.log("🔄 Conversione forzata sharedWith da oggetto ad array");
+        const sharedWithArray = Object.entries(existingPlan.sharedWith)
+          .filter(([_, value]) => value === true)
+          .map(([email]) => email);
+
+        // Aggiorna immediatamente il documento
+        await updateDoc(doc(db, "mealPlans", existingPlan.id), {
+          sharedWith: sharedWithArray,
+        });
+
+        // Aggiorna anche l'oggetto in memoria
+        existingPlan.sharedWith = sharedWithArray;
+        console.log("✅ Struttura sharedWith aggiornata", sharedWithArray);
+      }
+
+      logMigrationStep("Piano esistente trovato", existingPlan);
+
+      // Converti sharedWith da oggetto ad array se necessario
+      if (
+        typeof existingPlan.sharedWith === "object" &&
+        !Array.isArray(existingPlan.sharedWith)
+      ) {
+        console.log("🔄 Conversione sharedWith da oggetto ad array");
+        const sharedWithArray = Object.entries(existingPlan.sharedWith)
+          .filter(([_, value]) => value === true)
+          .map(([email]) => email);
+
+        existingPlan.sharedWith = sharedWithArray;
+        await updateDoc(doc(db, "mealPlans", existingPlan.id), {
+          sharedWith: sharedWithArray,
+        });
+        console.log("✅ Struttura sharedWith aggiornata", sharedWithArray);
+      }
+
       try {
         validatePlanStructure(existingPlan);
         console.log("✅ Struttura piano valida");
+        return existingPlan;
       } catch (error) {
         console.warn("⚠️ Piano esistente non valido:", error.message);
-        // Aggiorna il piano per correggere la struttura
+        // Se c'è qualche altro problema oltre sharedWith
         const correctedPlan = {
           ...existingPlan,
           sharedWith: Array.isArray(existingPlan.sharedWith)
-            ? existingPlan.sharedWith.reduce(
-                (acc, email) => ({ ...acc, [email]: true }),
-                {}
-              )
-            : existingPlan.sharedWith || {},
+            ? existingPlan.sharedWith
+            : [],
         };
 
         await updateDoc(doc(db, "mealPlans", existingPlan.id), correctedPlan);
         console.log("✅ Piano corretto e aggiornato");
         return correctedPlan;
       }
-
-      return existingPlan;
     }
 
     // 2. Creazione nuovo piano
@@ -114,7 +148,7 @@ export const migrateMealPlans = async (currentUser) => {
       userId: currentUser.uid,
       ownerEmail: currentUser.email,
       name: `Piano di ${currentUser.email}`,
-      sharedWith: {},
+      sharedWith: [], // Inizializza come array vuoto
       createdAt: new Date().toISOString(),
     };
 
@@ -159,13 +193,14 @@ export const migrateMealPlans = async (currentUser) => {
       const oldSharedData = oldShareSnapshot.docs[0].data();
       console.log("📤 Dati condivisione trovati:", oldSharedData);
 
-      const sharedWithArray = oldSharedData.sharedWith || [];
-      const sharedWithObject = sharedWithArray.reduce((acc, email) => {
-        acc[email] = true;
-        return acc;
-      }, {});
+      // Converti direttamente in array
+      const sharedWithArray = Array.isArray(oldSharedData.sharedWith)
+        ? oldSharedData.sharedWith
+        : Object.entries(oldSharedData.sharedWith || {})
+            .filter(([_, value]) => value === true)
+            .map(([email]) => email);
 
-      await updateDoc(newPlanRef, { sharedWith: sharedWithObject });
+      await updateDoc(newPlanRef, { sharedWith: sharedWithArray });
       console.log("✅ Condivisioni migrate con successo");
     } else {
       console.log("ℹ️ Nessuna condivisione da migrare");
